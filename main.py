@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QColor
 from PyQt6 import uic
+from statistics import StatsWorker
 
 
 
@@ -497,19 +498,39 @@ class MyWidget(QDialog):
         super().__init__()
         uic.loadUi('base.ui', self)
 
+        # Создаем и запускаем воркер статистики
+        self.worker = StatsWorker()
+        self.worker.start()
+
         self.application.clicked.connect(self.open_process_manager)
         self.sites.clicked.connect(self.open_site_blocker)
+        self.statistics.clicked.connect(self.update_ui_stats)
 
+    def closeEvent(self, event):
+        if hasattr(self, 'worker'):
+            self.worker.stop_worker()
+        event.accept()
 
     def open_process_manager(self):
         self.manager = BlacklistManagerDialog(self)
         self.manager.exec()
 
     def open_site_blocker(self):
-        """Открывает диалог управления блокировкой сайтов"""
-        from site_blocker_dialog import SiteBlockerDialog  # создадим ниже
-        dialog = SiteBlockerDialog(self)
-        dialog.exec()
+
+        try:
+            from site_blocker_dialog import SiteBlockerDialog
+            dialog = SiteBlockerDialog(self)
+            dialog.exec()
+        except ImportError:
+            QMessageBox.warning(self, "Ошибка", "Модуль site_blocker_dialog не найден")
+
+    def update_ui_stats(self):
+        text = self.worker.get_formatted_stats()
+        # Вывод в интерфейс
+        if hasattr(self, 'textEdit_2'):
+            self.textEdit_2.setPlainText(text)
+        else:
+            print("Ошибка: Поле textEdit_2 не найдено")
 
 
 if __name__ == '__main__':

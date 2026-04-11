@@ -1,0 +1,4 @@
+psutil
+win32gui
+PyQT6
+win32process
