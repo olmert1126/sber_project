@@ -49,6 +49,7 @@ class BlacklistManagerDialog(QDialog):
 
         self.setup_ui()
         self.update_list()
+        self.update_sites_list()
         self.refresh_running_apps()
 
         self.monitor_timer = QTimer()
@@ -107,6 +108,42 @@ class BlacklistManagerDialog(QDialog):
         blacklist_group.setLayout(blacklist_layout)
         layout.addWidget(blacklist_group)
 
+        # Секция 4: Блокировка сайтов
+        sites_group = QGroupBox("🌐 Блокировка сайтов")
+        sites_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 2px solid #17a2b8; border-radius: 5px; margin-top: 10px; }")
+        sites_layout = QVBoxLayout()
+
+        # Ввод домена
+        site_input_layout = QHBoxLayout()
+        self.site_input = QLineEdit()
+        self.site_input.setPlaceholderText("example.com или vk.com")
+        self.add_site_btn = QPushButton("Заблокировать сайт")
+        self.add_site_btn.setStyleSheet(
+            "QPushButton { background-color: #17a2b8; color: white; font-weight: bold; padding: 5px; }")
+        site_input_layout.addWidget(self.site_input)
+        site_input_layout.addWidget(self.add_site_btn)
+        sites_layout.addLayout(site_input_layout)
+
+        # Список заблокированных
+        self.blocked_sites_list = QListWidget()
+        self.blocked_sites_list.setMinimumHeight(120)
+        self.blocked_sites_list.setStyleSheet("QListWidget { background-color: #d1ecf1; }")
+        sites_layout.addWidget(self.blocked_sites_list)
+
+        # Кнопки управления
+        site_control_layout = QHBoxLayout()
+        self.remove_site_btn = QPushButton("Разблокировать")
+        self.flush_dns_btn = QPushButton("🔄 Обновить DNS")
+        self.remove_site_btn.setStyleSheet("QPushButton { background-color: #ffc107; color: black; font-weight: bold; }")
+        self.flush_dns_btn.setStyleSheet("QPushButton { background-color: #6c757d; color: white; }")
+        site_control_layout.addWidget(self.remove_site_btn)
+        site_control_layout.addWidget(self.flush_dns_btn)
+        sites_layout.addLayout(site_control_layout)
+
+        sites_group.setLayout(sites_layout)
+        layout.addWidget(sites_group)
+
         # Секция 3: Управление
         control_layout = QHBoxLayout()
         self.start_btn = QPushButton("ЗАПУСТИТЬ ЗАЩИТУ")
@@ -135,6 +172,11 @@ class BlacklistManagerDialog(QDialog):
         self.start_btn.clicked.connect(self.start_monitoring)
         self.stop_btn.clicked.connect(self.stop_monitoring)
         self.all_apps_list.itemDoubleClicked.connect(self.block_selected_app)
+
+        # Сигналы для блокировки сайтов
+        self.add_site_btn.clicked.connect(self.add_blocked_site)
+        self.remove_site_btn.clicked.connect(self.remove_blocked_site)
+        self.flush_dns_btn.clicked.connect(self.flush_dns_cache)
 
     def is_system_process(self, name, exe_path):
         """Проверяет, является ли процесс системным"""
@@ -366,6 +408,86 @@ class BlacklistManagerDialog(QDialog):
 
         self.refresh_running_apps()
 
+    # === Методы блокировки сайтов ===
+
+    def load_blocked_sites(self):
+        """Загружает заблокированные сайты из hosts"""
+        from site_blocker import get_blocked_domains
+        return get_blocked_domains()
+
+    def update_sites_list(self):
+        """Обновляет QListWidget с заблокированными сайтами"""
+        self.blocked_sites_list.clear()
+        for site in sorted(self.load_blocked_sites()):
+            self.blocked_sites_list.addItem(site)
+
+    def add_blocked_site(self):
+        """Добавляет сайт в блокировку"""
+        from site_blocker import is_valid_domain, normalize_domain, update_hosts_file
+
+        text = self.site_input.text().strip()
+        if not text:
+            QMessageBox.warning(self, "Внимание", "Введите домен сайта!")
+            return
+
+        if not is_valid_domain(text):
+            QMessageBox.critical(self, "Ошибка", "Некорректный формат домена!\nПример: vk.com")
+            return
+
+        domain = normalize_domain(text)
+        current = self.load_blocked_sites()
+
+        if domain in current:
+            QMessageBox.information(self, "Инфо", "Сайт уже заблокирован.")
+            return
+
+        current.add(domain)
+        try:
+            update_hosts_file(current)
+            self.site_input.clear()
+            self.update_sites_list()
+            self.log_label.setText(f"✅ Сайт заблокирован: {domain}")
+            QMessageBox.information(self, "Готово",
+                                    f"Сайт {domain} добавлен в блокировку!\nТребуется перезагрузка браузера.")
+        except PermissionError:
+            QMessageBox.critical(self, "Ошибка прав",
+                                 "Не удалось изменить hosts-файл.\nЗапустите программу от имени администратора.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось заблокировать сайт:\n{e}")
+
+    def remove_blocked_site(self):
+        """Убирает сайт из блокировки"""
+        from site_blocker import update_hosts_file
+
+        selected = self.blocked_sites_list.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "Внимание", "Выберите сайт для разблокировки!")
+            return
+
+        current = self.load_blocked_sites()
+        removed = []
+        for item in selected:
+            domain = item.text()
+            current.discard(domain)
+            current.discard(f"www.{domain}")
+            removed.append(domain)
+
+        try:
+            update_hosts_file(current)
+            self.update_sites_list()
+            self.log_label.setText(f"🔓 Разблокировано: {', '.join(removed)}")
+            QMessageBox.information(self, "Готово", "Сайты разблокированы!")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при разблокировке:\n{e}")
+
+    def flush_dns_cache(self):
+        """Очищает DNS-кэш системы"""
+        try:
+            os.system('ipconfig /flushdns')
+            self.log_label.setText("🔄 DNS-кэш очищен")
+            QMessageBox.information(self, "DNS", "Кэш разрешений обновлён!")
+        except:
+            QMessageBox.warning(self, "Внимание", "Не удалось очистить DNS-кэш")
 
 
 # Главное окно
@@ -376,11 +498,18 @@ class MyWidget(QDialog):
         uic.loadUi('base.ui', self)
 
         self.application.clicked.connect(self.open_process_manager)
+        self.sites.clicked.connect(self.open_site_blocker)
 
 
     def open_process_manager(self):
         self.manager = BlacklistManagerDialog(self)
         self.manager.exec()
+
+    def open_site_blocker(self):
+        """Открывает диалог управления блокировкой сайтов"""
+        from site_blocker_dialog import SiteBlockerDialog  # создадим ниже
+        dialog = SiteBlockerDialog(self)
+        dialog.exec()
 
 
 if __name__ == '__main__':
