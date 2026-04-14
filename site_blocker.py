@@ -1,28 +1,38 @@
-# site_blocker.py
+# site_blocker.py (ОБНОВЛЁННАЯ ВЕРСИЯ)
 import os
 import socket
 from pathlib import Path
 
 HOSTS_FILE = Path(os.environ['SystemRoot']) / 'System32' / 'drivers' / 'etc' / 'hosts'
 BACKUP_SUFFIX = '.backup_appblocker'
-BLOCK_IP = '0.0.0.0'  # Перенаправляем на "никуда"
+BLOCK_IP = '0.0.0.0'
 
-# Маркеры для безопасного редактирования
 MARKER_START = '# >>> APP_BLOCKER_START <<<\n'
 MARKER_END = '# >>> APP_BLOCKER_END <<<\n'
 
+# Дополнительные домены для популярных сайтов (включая зеркала)
+SITE_MIRRORS = {
+    'vk.com': ['vk.com', 'www.vk.com', 'm.vk.com', 'api.vk.com'],
+    'youtube.com': ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'],
+    'ok.ru': ['ok.ru', 'www.ok.ru', 'm.ok.ru'],
+    'facebook.com': ['facebook.com', 'www.facebook.com', 'm.facebook.com', 'fb.com'],
+    'instagram.com': ['instagram.com', 'www.instagram.com', 'm.instagram.com'],
+    'twitter.com': ['twitter.com', 'www.twitter.com', 'mobile.twitter.com'],
+    'tiktok.com': ['tiktok.com', 'www.tiktok.com', 'm.tiktok.com'],
+}
+
 
 def is_valid_domain(domain: str) -> bool:
-    """Проверка корректности домена"""
     if not domain or len(domain) > 253:
         return False
     domain = domain.lower().strip()
-    if domain.startswith(('http://', 'https://', 'www.')):
-        domain = domain.replace('http://', '').replace('https://', '').replace('www.', '', 1)
+    for prefix in ('http://', 'https://'):
+        domain = domain.replace(prefix, '')
+    domain = domain.replace('www.', '', 1) if domain.startswith('www.') else domain
     domain = domain.split('/')[0].split('?')[0].split('#')[0]
     try:
         socket.inet_aton(domain)
-        return False  # Это IP, а не домен
+        return False
     except socket.error:
         pass
     allowed = set('abcdefghijklmnopqrstuvwxyz0123456789-.')
@@ -30,7 +40,6 @@ def is_valid_domain(domain: str) -> bool:
 
 
 def normalize_domain(domain: str) -> str:
-    """Приводим домен к единому формату"""
     domain = domain.lower().strip()
     for prefix in ('http://', 'https://'):
         domain = domain.replace(prefix, '')
@@ -39,8 +48,26 @@ def normalize_domain(domain: str) -> str:
     return domain
 
 
+def get_all_domains_to_block(domain: str) -> set:
+    """Возвращает все варианты домена для блокировки"""
+    domains = set()
+    domain = normalize_domain(domain)
+
+    # Если есть в словаре зеркал
+    if domain in SITE_MIRRORS:
+        domains.update(SITE_MIRRORS[domain])
+    else:
+        # Стандартная блокировка
+        domains.add(domain)
+        if not domain.startswith('www.'):
+            domains.add(f'www.{domain}')
+        if not domain.startswith('m.'):
+            domains.add(f'm.{domain}')
+
+    return domains
+
+
 def get_blocked_domains() -> set:
-    """Читаем заблокированные домены из hosts"""
     blocked = set()
     if not HOSTS_FILE.exists():
         return blocked
@@ -54,31 +81,30 @@ def get_blocked_domains() -> set:
                 if line and not line.startswith('#'):
                     parts = line.split()
                     if len(parts) >= 2 and parts[0] == BLOCK_IP:
-                        domain = parts[1]
-                        if not domain.startswith('localhost'):
-                            blocked.add(domain)
+                        d = parts[1]
+                        if not d.startswith('localhost'):
+                            blocked.add(d)
     except Exception:
         pass
     return blocked
 
 
 def update_hosts_file(domains: set):
-    """Записывает список доменов в hosts с маркерами"""
     original_content = ""
     if HOSTS_FILE.exists():
         with open(HOSTS_FILE, 'r', encoding='utf-8') as f:
             original_content = f.read()
 
-    # Создаём бэкап при первом запуске
+    # Бэкап
     if not HOSTS_FILE.with_suffix(HOSTS_FILE.suffix + BACKUP_SUFFIX).exists():
         try:
             with open(HOSTS_FILE, 'rb') as src, open(HOSTS_FILE.with_suffix(HOSTS_FILE.suffix + BACKUP_SUFFIX),
                                                      'wb') as dst:
                 dst.write(src.read())
         except:
-            pass  # Не критично
+            pass
 
-    # Удаляем старый блок приложения
+    # Удаляем старый блок
     if MARKER_START in original_content and MARKER_END in original_content:
         new_content = original_content.split(MARKER_START)[0] + original_content.split(MARKER_END)[1]
     else:
@@ -89,15 +115,15 @@ def update_hosts_file(domains: set):
         block = MARKER_START
         for d in sorted(domains):
             block += f"{BLOCK_IP} {d}\n"
-            block += f"{BLOCK_IP} www.{d}\n"  # Блокируем и с www
         block += MARKER_END
         new_content += block
 
     with open(HOSTS_FILE, 'w', encoding='utf-8') as f:
         f.write(new_content.rstrip() + '\n')
 
-    # Очистка DNS-кэша
+    # Очистка DNS
     try:
         os.system('ipconfig /flushdns >nul 2>&1')
+        os.system('netsh winsock reset >nul 2>&1')
     except:
         pass
