@@ -509,11 +509,12 @@ class MyWidget(QDialog):
     def closeEvent(self, event):
         if hasattr(self, 'worker'):
             self.worker.stop_worker()
-        event.accept()
+            event.accept()
 
     def open_process_manager(self):
         self.manager = BlacklistManagerDialog(self)
         self.manager.exec()
+        self.worker.start()
 
     def open_site_blocker(self):
 
